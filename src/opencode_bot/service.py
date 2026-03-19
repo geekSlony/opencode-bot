@@ -62,7 +62,7 @@ class RelayService:
         lowered = text.lower()
         if lowered in {"/help", "help"}:
             return self._help_text()
-        if lowered in {"/sessions", "session_list", "/sl", "sl", "sessions"}:
+        if lowered in {"/sessions", "/session_list", "session_list", "/sl", "sl", "sessions"}:
             return await self._list_sessions_text()
         if lowered in {"/current", "/c", "current", "c"}:
             return self._current_binding_text(inbound.peer_key)
@@ -417,6 +417,8 @@ def _extract_paths_from_text(text: str) -> List[str]:
     cleaned = []
     for item in matches:
         value = item.strip().strip('"').strip("'")
+        if re.match(r"^/[A-Za-z_][A-Za-z0-9_]*$", value):
+            continue
         if value:
             cleaned.append(value)
     return cleaned

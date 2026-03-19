@@ -99,10 +99,11 @@ class Settings:
             feishu_encrypt_key=get("FEISHU_ENCRYPT_KEY", ""),
             opencode_base_url=get("OPENCODE_BASE_URL", "http://127.0.0.1:4096"),
             opencode_transport=get("OPENCODE_TRANSPORT", "cli"),
-            opencode_bin=get("OPENCODE_BIN", os.path.expanduser("~/.opencode/bin/opencode")),
-            opencode_db_path=get(
-                "OPENCODE_DB_PATH",
-                os.path.expanduser("~/.local/share/opencode/opencode.db"),
+            opencode_bin=os.path.expanduser(
+                get("OPENCODE_BIN", "~/.opencode/bin/opencode")
+            ),
+            opencode_db_path=os.path.expanduser(
+                get("OPENCODE_DB_PATH", "~/.local/share/opencode/opencode.db")
             ),
             opencode_list_sessions_path=get("OPENCODE_LIST_SESSIONS_PATH", "/api/sessions/list"),
             opencode_list_sessions_path_alt=get("OPENCODE_LIST_SESSIONS_PATH_ALT", "/api/claw/sessions/list"),

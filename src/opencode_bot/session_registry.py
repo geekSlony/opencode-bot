@@ -107,9 +107,15 @@ class SessionRegistry:
         if not raw:
             return []
 
-        title_map, directory_map = self._load_session_meta(list(raw.keys()), force_title_refresh=force_title_refresh)
+        title_map, directory_map, existing_ids = self._load_session_meta(
+            list(raw.keys()),
+            force_title_refresh=force_title_refresh,
+        )
         sessions: List[OnlineSession] = []
         for session_id, (pid, tty, _) in raw.items():
+            if session_id not in existing_ids:
+                logger.debug("skip unknown session id not found in db session=%s", session_id)
+                continue
             title = title_map.get(session_id) or session_id
             directory = directory_map.get(session_id, "")
             workdir_available = self._is_workdir_available(pid, directory)
@@ -152,10 +158,14 @@ class SessionRegistry:
             score += 5
         return score
 
-    def _load_session_meta(self, session_ids: List[str], force_title_refresh: bool = False) -> Tuple[Dict[str, str], Dict[str, str]]:
+    def _load_session_meta(
+        self,
+        session_ids: List[str],
+        force_title_refresh: bool = False,
+    ) -> Tuple[Dict[str, str], Dict[str, str], Set[str]]:
         db_path = Path(self._db_path)
         if not db_path.exists() or not session_ids:
-            return {}, {}
+            return {}, {}, set()
         conn = sqlite3.connect(str(db_path))
         try:
             placeholders = ",".join(["?"] * len(session_ids))
@@ -171,7 +181,10 @@ class SessionRegistry:
                 default_titles[session_id] = title
 
             now = int(time.time())
+            existing_ids = set(default_titles.keys())
             for session_id in session_ids:
+                if session_id not in existing_ids:
+                    continue
                 cached = self._title_cache.get(session_id)
                 if cached is None or force_title_refresh:
                     title = self._build_short_cn_title(conn, session_id, default_titles.get(session_id, session_id))
@@ -184,7 +197,7 @@ class SessionRegistry:
                 if now - updated_ts >= self._title_refresh_s:
                     self._refresh_title_async(session_id, default_titles.get(session_id, session_id))
 
-            return output, directories
+            return output, directories, existing_ids
         finally:
             conn.close()
 

@@ -252,3 +252,23 @@ def test_file_intent_sends_file_via_feishu(tmp_path, monkeypatch):
     response = asyncio.run(service.handle_inbound(make_inbound("m11", f"路径是 {file_path}")))
     assert "已发送文件" in str(response)
     assert feishu.sent_files == [str(file_path)]
+
+
+def test_session_list_command_alias_with_leading_slash(tmp_path):
+    storage = Storage(str(tmp_path / "bot.db"))
+    client = FakeOpenCodeClient()
+    service = RelayService(storage=storage, opencode_client=cast(Any, client), settings=_settings())
+
+    response = asyncio.run(service.handle_inbound(make_inbound("m12", "/session_list")))
+    assert "在线 session 列表" in str(response)
+
+
+def test_file_intent_does_not_treat_slash_command_as_path(tmp_path):
+    storage = Storage(str(tmp_path / "bot.db"))
+    client = FakeOpenCodeClient()
+    settings = _settings()
+    settings.opencode_send_files_enabled = 1
+    service = RelayService(storage=storage, opencode_client=cast(Any, client), settings=settings)
+
+    response = asyncio.run(service.handle_inbound(make_inbound("m13", "/session_list")))
+    assert "未发送文件" not in str(response)

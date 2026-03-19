@@ -218,6 +218,64 @@ def test_title_max_len_config_is_applied(monkeypatch, tmp_path):
     assert sessions[0].display_name == "A very ver..."
 
 
+def test_refresh_hides_internal_sessions(monkeypatch, tmp_path):
+    db_path = tmp_path / "opencode.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT)")
+    conn.execute("INSERT INTO session (id, title) VALUES (?, ?)", ("ses_user", "User session"))
+    conn.commit()
+    conn.close()
+
+    ps_text = (
+        "PID UID TT ARGS\n"
+        "100 1000 pts/1 opencode -s ses_title_agent_123\n"
+        "101 1000 pts/2 opencode -s ses_intent_agent_456\n"
+        "102 1000 pts/3 opencode -s ses_user\n"
+    )
+
+    def fake_run(cmd, capture_output, text, check):
+        _ = (cmd, capture_output, text, check)
+        return FakeCompletedProcess(ps_text, 0)
+
+    monkeypatch.setattr("opencode_bot.session_registry.os.getuid", lambda: 1000)
+    monkeypatch.setattr("opencode_bot.session_registry.subprocess.run", fake_run)
+
+    registry = SessionRegistry(
+        str(db_path),
+        hidden_session_ids=["ses_title_agent_123", "ses_intent_agent_456"],
+    )
+    sessions = registry.refresh()
+    assert len(sessions) == 1
+    assert sessions[0].session_id == "ses_user"
+
+
+def test_refresh_skips_session_not_found_in_db(monkeypatch, tmp_path):
+    db_path = tmp_path / "opencode.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT)")
+    conn.execute("INSERT INTO session (id, title) VALUES (?, ?)", ("ses_real", "Real session"))
+    conn.commit()
+    conn.close()
+
+    ps_text = (
+        "PID UID TT ARGS\n"
+        "111 1000 pts/1 opencode -s ses_missing\n"
+        "222 1000 pts/2 opencode -s ses_real\n"
+    )
+
+    def fake_run(cmd, capture_output, text, check):
+        _ = (cmd, capture_output, text, check)
+        return FakeCompletedProcess(ps_text, 0)
+
+    monkeypatch.setattr("opencode_bot.session_registry.os.getuid", lambda: 1000)
+    monkeypatch.setattr("opencode_bot.session_registry.subprocess.run", fake_run)
+
+    registry = SessionRegistry(str(db_path))
+    sessions = registry.refresh()
+    assert len(sessions) == 1
+    assert sessions[0].session_id == "ses_real"
+
+
 def test_title_agent_uses_recent_logs_for_summary(monkeypatch, tmp_path):
     db_path = tmp_path / "opencode.db"
     conn = sqlite3.connect(str(db_path))

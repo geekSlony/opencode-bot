@@ -24,7 +24,10 @@ class OpenCodeClient:
             title_agent_session_id=settings.opencode_title_agent_session_id,
             title_agent_timeout_s=settings.opencode_title_agent_timeout_s,
             opencode_bin=settings.opencode_bin,
-            hidden_session_ids=[settings.opencode_title_agent_session_id],
+            hidden_session_ids=[
+                settings.opencode_title_agent_session_id,
+                settings.opencode_intent_agent_session_id,
+            ],
         )
         self._base_url = settings.opencode_base_url.rstrip("/")
         self._list_path = settings.opencode_list_sessions_path
