@@ -81,6 +81,10 @@ class RelayService:
                 session_id = sessions[idx - 1].session_id
                 return await self._bind_session(inbound.peer_key, session_id)
             return await self._bind_session(inbound.peer_key, arg)
+        if lowered in {"/sn", "sn"} or lowered.startswith("/sn "):
+            target = text.split(maxsplit=1)
+            workdir = target[1].strip() if len(target) > 1 else ""
+            return await self._create_and_bind_session(inbound.peer_key, workdir)
         if lowered == "/session_new" or lowered.startswith("/session_new "):
             target = text.split(maxsplit=1)
             workdir = target[1].strip() if len(target) > 1 else ""
@@ -107,9 +111,9 @@ class RelayService:
         )
 
     async def _send_to_specific_session(self, inbound: FeishuInbound, session_id: str, text: str) -> str:
-        target = await self._resolve_online_session(session_id)
+        target = await self._resolve_session(session_id)
         if target is None:
-            return f"未找到在线 session: {self._display_session_id(session_id)}。请先 /sessions 查看可用列表。"
+            return f"未找到可用 session: {self._display_session_id(session_id)}。请先 /sessions 查看可用列表。"
 
         return await self._send_with_fast_ack(
             message_id=inbound.message_id,
@@ -190,9 +194,11 @@ class RelayService:
         return await self._opencode.list_online_sessions()
 
     async def bind_peer_to_session(self, peer_key: str, session_id: str) -> str:
-        target = await self._resolve_online_session(session_id)
+        target = await self._resolve_session(session_id)
         if target is None:
-            return f"未找到在线 session: {self._display_session_id(session_id)}。请先 /sessions 查看可用列表。"
+            return f"未找到可用 session: {self._display_session_id(session_id)}。请先 /sessions 查看可用列表。"
+        if not target.workdir_available:
+            return f"session 工作目录不可用: {self._display_session_id(session_id)}。请先在目标目录启动会话后重试。"
         self._storage.bind_session(peer_key, target.session_id)
         return f"已绑定 session: {self._display_session_id(target.session_id)} ({target.display_name})"
 
@@ -202,6 +208,15 @@ class RelayService:
     async def _resolve_online_session(self, session_id: str) -> Optional[OnlineSession]:
         sessions = await self._list_bindable_sessions()
         return next((s for s in sessions if s.session_id == session_id), None)
+
+    async def _resolve_session(self, session_id: str) -> Optional[OnlineSession]:
+        resolver = getattr(self._opencode, "resolve_session", None)
+        if callable(resolver):
+            maybe = resolver(session_id)
+            if asyncio.iscoroutine(maybe):
+                return await maybe
+            return maybe
+        return await self._resolve_online_session(session_id)
 
     async def _list_bindable_sessions(self) -> List[OnlineSession]:
         sessions = await self._opencode.list_online_sessions()
@@ -369,7 +384,7 @@ class RelayService:
             "可用命令：\n"
             "/session_list (/sl) 查看在线 session\n"
             "/bind <session_id> (或 /bind <序号>) 绑定会话\n"
-            "/session_new [目录] 创建并绑定新会话\n"
+            "/session_new [目录] (或 /sn [目录]) 创建并绑定新会话\n"
             "/session_unbind (/su) 解绑当前会话\n"
             "/send <session_id> <内容> 定向发指令\n"
             "@ses_xxx <内容> 定向发指令\n"

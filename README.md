@@ -50,7 +50,7 @@
 |------|--------|------|
 | `/session_list` | `/sl` | 查看在线 session 列表（下发按钮卡片） |
 | `/bind <session_id>` | `/bind <序号>` | 绑定会话，支持 session_id 或列表序号 |
-| `/session_new [目录]` | - | 主动创建新 session（可指定仓库目录）并自动尝试绑定 |
+| `/session_new [目录]` | `/sn [目录]` | 主动创建新 session（可指定仓库目录）并自动尝试绑定 |
 | `/session_unbind` | `/su` | 解绑当前会话 |
 | `/send <session_id> <内容>` | - | 单次定向发送指令 |
 | `@<session_id> <内容>` | - | 单次定向发送快捷方式 |
@@ -243,9 +243,9 @@ scripts/opencode-botctl.sh autostart-status
 如果 `/session_list` 返回空，可直接在飞书创建新会话：
 
 - `/session_new`：在服务当前工作目录创建 session
-- `/session_new /abs/path/to/repo`：在指定仓库目录创建 session
+- `/session_new /abs/path/to/repo`：在指定仓库目录创建 session（也可用 `/sn /abs/path/to/repo`）
 
-创建成功后会自动尝试绑定；若创建后短时间未被检测到，可稍后再 `/session_list` 并手动 `/bind`。
+创建成功后会自动尝试绑定。当前实现通过 `opencode run --dir <目录>` 落库并回读新 session ID，绑定时也支持解析已存在但离线的 session（目录可用即可）。
 
 ### 7.2 单次定向
 

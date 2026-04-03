@@ -1,4 +1,5 @@
 import sys
+import sqlite3
 from pathlib import Path
 
 
@@ -103,6 +104,7 @@ def test_send_to_session_cli_uses_resolved_cwd_and_env(monkeypatch):
 def test_send_to_session_cli_falls_back_when_no_context(monkeypatch):
     client = OpenCodeClient(_settings())
     monkeypatch.setattr(client, "_find_target_session", lambda session_id: None)
+    monkeypatch.setattr(client, "_find_session_from_db", lambda session_id: None)
     monkeypatch.setattr(client, "_resolve_cli_context_from_target", lambda target: (None, None))
 
     captured = {}
@@ -116,7 +118,7 @@ def test_send_to_session_cli_falls_back_when_no_context(monkeypatch):
     monkeypatch.setattr("opencode_bot.opencode_client.subprocess.run", fake_run)
 
     output = client._send_to_session_by_cli("ses_target", "hello")
-    assert "目标 session 不在线或不可解析" in output
+    assert "目标 session 不存在或不可解析" in output
     assert captured == {}
 
 
@@ -315,27 +317,43 @@ def test_resolve_cli_context_prefers_session_directory(monkeypatch, tmp_path):
 def test_create_session_starts_opencode_with_session_id(monkeypatch, tmp_path):
     settings = _settings()
     settings.opencode_bin = "opencode"
+    settings.opencode_db_path = str(tmp_path / "opencode.db")
+    conn = sqlite3.connect(settings.opencode_db_path)
+    conn.execute("CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, time_updated INTEGER, title TEXT)")
+    conn.execute(
+        "INSERT INTO session(id, directory, time_updated, title) VALUES (?, ?, ?, ?)",
+        ("ses_old", str(tmp_path), 1, "old"),
+    )
+    conn.commit()
+    conn.close()
     client = OpenCodeClient(settings)
 
     captured = {}
 
-    def fake_popen(cmd, stdin, stdout, stderr, start_new_session, cwd):
-        _ = (stdin, stdout, stderr, start_new_session)
+    def fake_run(cmd, capture_output, text, check, timeout, cwd):
+        _ = (capture_output, text, check, timeout)
         captured["cmd"] = cmd
         captured["cwd"] = cwd
 
-        class Dummy:
-            pass
+        conn = sqlite3.connect(settings.opencode_db_path)
+        conn.execute(
+            "INSERT INTO session(id, directory, time_updated, title) VALUES (?, ?, ?, ?)",
+            ("ses_new", str(tmp_path), 2, "new"),
+        )
+        conn.commit()
+        conn.close()
+        return FakeCompletedProcess(stdout="ok", stderr="", returncode=0)
 
-        return Dummy()
-
-    monkeypatch.setattr("opencode_bot.opencode_client.os.path.exists", lambda p: p == "opencode")
-    monkeypatch.setattr("opencode_bot.opencode_client.subprocess.Popen", fake_popen)
+    monkeypatch.setattr(
+        "opencode_bot.opencode_client.os.path.exists",
+        lambda p: p in {"opencode", settings.opencode_db_path},
+    )
+    monkeypatch.setattr("opencode_bot.opencode_client.subprocess.run", fake_run)
 
     session_id, message = client.create_session(str(tmp_path))
-    assert session_id is not None
+    assert session_id == "ses_new"
     assert message.startswith("已创建 session")
     assert captured["cmd"][0] == "opencode"
-    assert captured["cmd"][1] == "-s"
-    assert captured["cmd"][2] == session_id
+    assert captured["cmd"][1] == "run"
+    assert "--dir" in captured["cmd"]
     assert captured["cwd"] == str(tmp_path)

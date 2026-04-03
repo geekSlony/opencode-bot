@@ -28,6 +28,9 @@ class FakeOpenCodeClient:
     async def refresh_session_titles_now(self):
         self.refresh_called += 1
 
+    async def resolve_session(self, session_id: str):
+        return next((item for item in self.sessions if item.session_id == session_id), None)
+
     def create_session(self, directory: Optional[str] = None):
         _ = directory
         session_id = "s-new"
@@ -189,6 +192,17 @@ def test_session_new_creates_and_binds(tmp_path):
     assert client.created == ["s-new"]
 
 
+def test_session_new_short_alias_creates_and_binds(tmp_path):
+    storage = Storage(str(tmp_path / "bot.db"))
+    client = FakeOpenCodeClient()
+    service = RelayService(storage=storage, opencode_client=cast(Any, client), settings=_settings())
+
+    response = asyncio.run(service.handle_inbound(make_inbound("m7c", "/sn")))
+    assert "已创建 session: s-new" in str(response)
+    assert "已绑定 session" in str(response)
+    assert client.created == ["s-new"]
+
+
 def test_session_list_marks_workdir_unavailable(tmp_path):
     storage = Storage(str(tmp_path / "bot.db"))
     client = FakeOpenCodeClient()
@@ -231,7 +245,7 @@ def test_bind_unavailable_session_by_id_is_rejected(tmp_path):
     service = RelayService(storage=storage, opencode_client=cast(Any, client), settings=_settings())
 
     response = asyncio.run(service.handle_inbound(make_inbound("m11", "/bind s-1")))
-    assert "未找到在线 session" in str(response)
+    assert "session 工作目录不可用" in str(response)
 
 
 def test_fast_ack_returns_waiting_message_for_slow_session(tmp_path):

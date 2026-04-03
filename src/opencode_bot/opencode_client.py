@@ -1,6 +1,7 @@
 import os
 import subprocess
 import logging
+import sqlite3
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -17,6 +18,7 @@ class OpenCodeClient:
     def __init__(self, settings: Settings):
         self._transport = settings.opencode_transport
         self._opencode_bin = settings.opencode_bin
+        self._db_path = settings.opencode_db_path
         self._session_registry = SessionRegistry(
             settings.opencode_db_path,
             title_refresh_s=settings.opencode_session_title_refresh_s,
@@ -128,19 +130,39 @@ class OpenCodeClient:
         else:
             target_dir = os.getcwd()
 
-        session_id = f"ses_{int(time.time())}_{os.getpid()}"
-        cmd = [binary, "-s", session_id]
+        before_ids = self._list_session_ids_by_directory(target_dir)
+        cmd = [
+            binary,
+            "run",
+            "--format",
+            "default",
+            "--dir",
+            target_dir,
+            "创建一个会话锚点，直接回复 ok",
+        ]
         try:
-            subprocess.Popen(
+            proc = subprocess.run(
                 cmd,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=max(10, int(self._timeout)),
                 cwd=target_dir,
             )
+        except subprocess.TimeoutExpired:
+            return None, "创建 session 超时，请稍后重试。"
         except OSError as exc:
             return None, f"创建 session 失败: {exc}"
+
+        if proc.returncode != 0:
+            err = (proc.stderr or "").strip()
+            if err:
+                return None, f"创建 session 失败: {err}"
+            return None, "创建 session 失败：opencode 未返回成功状态。"
+
+        session_id = self._wait_for_new_session_id(target_dir, before_ids, wait_s=3.0)
+        if not session_id:
+            return None, "创建 session 成功，但暂未识别到新会话 ID，请稍后 /session_list 查看。"
 
         return session_id, f"已创建 session: {session_id}"
 
@@ -155,7 +177,9 @@ class OpenCodeClient:
             binary = "opencode"
         target = self._find_target_session(session_id)
         if target is None:
-            return f"目标 session 不在线或不可解析: {session_id}。请先 /session_list 后重新绑定。"
+            target = self._find_session_from_db(session_id)
+        if target is None:
+            return f"目标 session 不存在或不可解析: {session_id}。请先 /session_list 后重新绑定。"
         cmd = [binary, "run", "--session", session_id, "--format", "default"]
         target_dir = ""
         if target and target.directory:
@@ -259,13 +283,15 @@ class OpenCodeClient:
     def _resolve_cli_context_from_target(
         self, target: Optional[OnlineSession]
     ) -> "Tuple[Optional[str], Optional[Dict[str, str]]]":
-        if target is None or target.pid is None:
+        if target is None:
             return None, None
 
         cwd: Optional[str] = None
         env: Optional[Dict[str, str]] = None
         if target.directory and os.path.isdir(target.directory):
             cwd = target.directory
+        if target.pid is None:
+            return cwd, None
         proc_cwd = self._read_proc_cwd(target.pid)
         if proc_cwd and not cwd:
             cwd = proc_cwd
@@ -273,6 +299,88 @@ class OpenCodeClient:
         if proc_env:
             env = proc_env
         return cwd, env
+
+    async def resolve_session(self, session_id: str) -> Optional[OnlineSession]:
+        if self._transport != "cli":
+            sessions = await self.list_online_sessions()
+            return next((item for item in sessions if item.session_id == session_id), None)
+        target = self._find_target_session(session_id)
+        if target is not None:
+            return target
+        return self._find_session_from_db(session_id)
+
+    def _find_session_from_db(self, session_id: str) -> Optional[OnlineSession]:
+        db_path = os.path.expanduser(self._db_path)
+        if not os.path.exists(db_path):
+            return None
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT id, title, directory FROM session WHERE id = ? LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        finally:
+            conn.close()
+        if not row:
+            return None
+        sid = str(row[0])
+        title = str(row[1]) if len(row) > 1 and row[1] else sid
+        directory = str(row[2]) if len(row) > 2 and row[2] else ""
+        return OnlineSession(
+            session_id=sid,
+            display_name=title,
+            status="offline",
+            pid=None,
+            tty="",
+            last_seen_ts=int(time.time()),
+            directory=directory,
+            workdir_available=bool(directory and os.path.isdir(directory)),
+        )
+
+    def _list_session_ids_by_directory(self, directory: str) -> "set[str]":
+        db_path = os.path.expanduser(self._db_path)
+        if not os.path.exists(db_path):
+            return set()
+        conn = sqlite3.connect(db_path)
+        try:
+            rows = conn.execute(
+                "SELECT id FROM session WHERE directory = ?",
+                (directory,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return set()
+        finally:
+            conn.close()
+        return {str(row[0]) for row in rows if row and row[0]}
+
+    def _wait_for_new_session_id(self, directory: str, before_ids: "set[str]", wait_s: float) -> Optional[str]:
+        deadline = time.time() + max(0.5, wait_s)
+        while time.time() < deadline:
+            latest = self._latest_session_id_by_directory(directory)
+            if latest and latest not in before_ids:
+                return latest
+            time.sleep(0.2)
+        return None
+
+    def _latest_session_id_by_directory(self, directory: str) -> Optional[str]:
+        db_path = os.path.expanduser(self._db_path)
+        if not os.path.exists(db_path):
+            return None
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT id FROM session WHERE directory = ? ORDER BY time_updated DESC LIMIT 1",
+                (directory,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        finally:
+            conn.close()
+        if not row or not row[0]:
+            return None
+        return str(row[0])
 
     @staticmethod
     def _read_proc_cwd(pid: int) -> Optional[str]:
