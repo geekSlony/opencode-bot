@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 
 from .config import Settings
-from .feishu_client import FeishuClient
+from .feishu_client import FeishuClient, FeishuSendError
 from .models import FeishuInbound
 from .opencode_client import OpenCodeClient
 from .session_monitor import SessionMonitor
@@ -124,13 +124,7 @@ def _make_handler(
                 reply = ""
                 for peer_key in peer_keys:
                     reply = asyncio.run(relay_service.bind_peer_to_session(peer_key, session_id))
-                asyncio.run(
-                    feishu_client.send_text(
-                        receive_id=receive_id,
-                        receive_id_type=receive_id_type,
-                        text=reply,
-                    )
-                )
+                _send_text_with_fallback(feishu_client, event, receive_id, receive_id_type, reply)
                 self._send_json(HTTPStatus.OK, {"ok": True, "action": "bind_session"})
                 return
             
@@ -148,12 +142,12 @@ def _make_handler(
                 reply = ""
                 for peer_key in peer_keys:
                     reply = relay_service.unbind_peer(peer_key)
-                asyncio.run(
-                    feishu_client.send_text(
-                        receive_id=open_id or chat_id,
-                        receive_id_type="open_id" if open_id else "chat_id",
-                        text=reply,
-                    )
+                _send_text_with_fallback(
+                    feishu_client,
+                    event,
+                    open_id or chat_id,
+                    "open_id" if open_id else "chat_id",
+                    reply,
                 )
                 self._send_json(HTTPStatus.OK, {"ok": True, "action": "unbind_session"})
                 return
@@ -244,7 +238,7 @@ def _make_handler(
 
 def _is_sessions_command(text: str) -> bool:
     lowered = text.strip().lower()
-    return lowered in {"/sessions", "sessions"}
+    return lowered in {"/sessions", "sessions", "/session_list", "session_list", "/sl", "sl"}
 
 
 def _extract_card_bind_action(event: Dict[str, Any]) -> Optional[Tuple[List[str], str, str, str]]:
@@ -313,3 +307,37 @@ def _normalize_command_text(text: str) -> str:
     output = output.replace("\u00a0", " ")
     output = " ".join(output.split())
     return output.strip()
+
+
+def _send_text_with_fallback(
+    feishu_client: FeishuClient,
+    event: Dict[str, Any],
+    receive_id: str,
+    receive_id_type: str,
+    text: str,
+) -> None:
+    try:
+        asyncio.run(
+            feishu_client.send_text(
+                receive_id=receive_id,
+                receive_id_type=receive_id_type,
+                text=text,
+            )
+        )
+        return
+    except FeishuSendError as exc:
+        if exc.error_code not in {200340, 99992361}:
+            raise
+
+        context = event.get("context")
+        chat_id = str(context.get("open_chat_id") or "") if isinstance(context, dict) else ""
+        if not chat_id or receive_id_type == "chat_id":
+            return
+
+        asyncio.run(
+            feishu_client.send_text(
+                receive_id=chat_id,
+                receive_id_type="chat_id",
+                text=text,
+            )
+        )

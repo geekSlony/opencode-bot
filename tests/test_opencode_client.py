@@ -310,3 +310,32 @@ def test_resolve_cli_context_prefers_session_directory(monkeypatch, tmp_path):
     cwd, env = client._resolve_cli_context("ses_target")
     assert cwd == str(workdir)
     assert env == {"CONDA_PREFIX": "/tmp/conda"}
+
+
+def test_create_session_starts_opencode_with_session_id(monkeypatch, tmp_path):
+    settings = _settings()
+    settings.opencode_bin = "opencode"
+    client = OpenCodeClient(settings)
+
+    captured = {}
+
+    def fake_popen(cmd, stdin, stdout, stderr, start_new_session, cwd):
+        _ = (stdin, stdout, stderr, start_new_session)
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+
+        class Dummy:
+            pass
+
+        return Dummy()
+
+    monkeypatch.setattr("opencode_bot.opencode_client.os.path.exists", lambda p: p == "opencode")
+    monkeypatch.setattr("opencode_bot.opencode_client.subprocess.Popen", fake_popen)
+
+    session_id, message = client.create_session(str(tmp_path))
+    assert session_id is not None
+    assert message.startswith("已创建 session")
+    assert captured["cmd"][0] == "opencode"
+    assert captured["cmd"][1] == "-s"
+    assert captured["cmd"][2] == session_id
+    assert captured["cwd"] == str(tmp_path)

@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_DIR="$ROOT_DIR/run"
 PID_FILE="$RUN_DIR/opencode-bot.pid"
 LOG_FILE="/tmp/opencode-bot.log"
+CRON_TAG="opencode-bot-autostart"
 
 mkdir -p "$RUN_DIR"
 
@@ -90,9 +91,55 @@ show_log_hint() {
   echo "log file: $LOG_FILE"
 }
 
+autostart_enable() {
+  local line_reboot="@reboot cd $ROOT_DIR && scripts/opencode-botctl.sh start >>/tmp/opencode-bot.cron.log 2>&1 # $CRON_TAG"
+  local line_watch="* * * * * cd $ROOT_DIR && scripts/opencode-botctl.sh status >/dev/null 2>&1 || (cd $ROOT_DIR && scripts/opencode-botctl.sh start >>/tmp/opencode-bot.cron.log 2>&1) # $CRON_TAG"
+  local existing
+  existing="$(crontab -l 2>/dev/null || true)"
+  local filtered
+  filtered="$(printf '%s\n' "$existing" | python3 -c "import sys; lines=sys.stdin.read().splitlines(); print('\\n'.join([x for x in lines if '$CRON_TAG' not in x]))")"
+
+  {
+    if [[ -n "$filtered" ]]; then
+      printf "%s\n" "$filtered"
+    fi
+    printf "%s\n" "$line_reboot"
+    printf "%s\n" "$line_watch"
+  } | crontab -
+
+  echo "autostart enabled in user crontab"
+}
+
+autostart_disable() {
+  local existing
+  existing="$(crontab -l 2>/dev/null || true)"
+  local filtered
+  filtered="$(printf '%s\n' "$existing" | python3 -c "import sys; lines=sys.stdin.read().splitlines(); print('\\n'.join([x for x in lines if '$CRON_TAG' not in x]))")"
+  if [[ -n "$filtered" ]]; then
+    printf "%s\n" "$filtered" | crontab -
+  else
+    crontab -r 2>/dev/null || true
+  fi
+  echo "autostart disabled from user crontab"
+}
+
+autostart_status() {
+  local existing
+  existing="$(crontab -l 2>/dev/null || true)"
+  local marker
+  marker="$(printf '%s\n' "$existing" | python3 -c "import sys, re; s=sys.stdin.read(); print('yes' if re.search(r'$CRON_TAG', s) else 'no')")"
+  if [[ "$marker" == "yes" ]]; then
+    echo "autostart: enabled"
+    echo "$existing" | python3 -c "import sys; [print(x) for x in sys.stdin.read().splitlines() if '$CRON_TAG' in x]"
+    return 0
+  fi
+  echo "autostart: disabled"
+  return 1
+}
+
 usage() {
   cat <<'EOF'
-Usage: scripts/opencode-botctl.sh <start|stop|restart|status|log>
+Usage: scripts/opencode-botctl.sh <start|stop|restart|status|log|autostart-enable|autostart-disable|autostart-status>
 EOF
 }
 
@@ -112,6 +159,15 @@ case "$cmd" in
     ;;
   log)
     show_log_hint
+    ;;
+  autostart-enable)
+    autostart_enable
+    ;;
+  autostart-disable)
+    autostart_disable
+    ;;
+  autostart-status)
+    autostart_status
     ;;
   *)
     usage

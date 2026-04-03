@@ -192,6 +192,17 @@ class SessionMonitor:
                         receive_id_type,
                     )
                     continue
+                if isinstance(exc, FeishuSendError) and exc.error_code in {99992361, 200340}:
+                    self._peer_suppress_until[peer_key] = time.time() + 86400
+                    self._storage.remove_peer(peer_key)
+                    logger.warning(
+                        "session monitor removed peer due to cross-app or invalid target peer=%s session=%s receive_id_type=%s error_code=%s",
+                        peer_key,
+                        session_id,
+                        receive_id_type,
+                        exc.error_code,
+                    )
+                    continue
                 if isinstance(exc, urllib.error.HTTPError) and exc.code == 400:
                     self._peer_suppress_until[peer_key] = time.time() + 600
                     logger.warning(

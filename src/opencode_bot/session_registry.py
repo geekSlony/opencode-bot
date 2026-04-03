@@ -73,6 +73,7 @@ class SessionRegistry:
 
         session_re = re.compile(r"(?:^|\s)(?:-s|--session)(?:\s+|=)(ses_[A-Za-z0-9_-]+)(?:\s|$)")
         raw: Dict[str, Tuple[int, str, int]] = {}
+        implicit_candidates: Dict[str, List[Tuple[int, str, int]]] = {}
         for line in proc.stdout.splitlines()[1:]:
             parts = line.strip().split(None, 3)
             if len(parts) < 4:
@@ -80,10 +81,25 @@ class SessionRegistry:
             pid_text, uid, tty, args = parts
             if uid != self._uid:
                 continue
-            if "opencode" not in args:
+            argv = args.strip().split(None, 1)
+            if not argv:
+                continue
+            binary_name = os.path.basename(argv[0])
+            if binary_name != "opencode":
                 continue
             match = session_re.search(args)
             if not match:
+                if " opencode run " in f" {args} ":
+                    continue
+                try:
+                    pid = int(pid_text)
+                except ValueError:
+                    continue
+                directory = self._read_proc_cwd(pid)
+                if not directory:
+                    continue
+                score = self._session_candidate_score(args, tty)
+                implicit_candidates.setdefault(directory, []).append((pid, tty, score))
                 continue
             session_id = match.group(1)
             if session_id in self._hidden_session_ids:
@@ -103,6 +119,11 @@ class SessionRegistry:
                 continue
             if score == prev_score and pid > 0 and (prev_pid <= 0 or pid < prev_pid):
                 raw[session_id] = (pid, tty, score)
+
+        if implicit_candidates:
+            inferred = self._infer_sessions_from_directories(implicit_candidates, occupied_ids=set(raw.keys()))
+            for session_id, item in inferred.items():
+                raw.setdefault(session_id, item)
 
         if not raw:
             return []
@@ -146,6 +167,16 @@ class SessionRegistry:
         return bool(cwd and os.path.isdir(cwd))
 
     @staticmethod
+    def _read_proc_cwd(pid: int) -> str:
+        try:
+            cwd = os.readlink(f"/proc/{pid}/cwd")
+        except OSError:
+            return ""
+        if not cwd or not os.path.isdir(cwd):
+            return ""
+        return cwd
+
+    @staticmethod
     def _session_candidate_score(args: str, tty: str) -> int:
         score = 0
         if re.search(r"(?:^|\s)-s\s+ses_", args):
@@ -157,6 +188,46 @@ class SessionRegistry:
         if tty and tty != "?":
             score += 5
         return score
+
+    def _infer_sessions_from_directories(
+        self,
+        candidates: Dict[str, List[Tuple[int, str, int]]],
+        occupied_ids: Set[str],
+    ) -> Dict[str, Tuple[int, str, int]]:
+        db_path = Path(self._db_path)
+        if not db_path.exists():
+            return {}
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            assigned: Dict[str, Tuple[int, str, int]] = {}
+            for directory, workers in candidates.items():
+                rows = conn.execute(
+                    """
+                    SELECT id
+                    FROM session
+                    WHERE directory = ?
+                      AND (time_archived IS NULL OR time_archived = 0)
+                    ORDER BY time_updated DESC
+                    """,
+                    (directory,),
+                ).fetchall()
+                ids = [str(row[0]) for row in rows if row and row[0]]
+                ids = [sid for sid in ids if sid not in self._hidden_session_ids and sid not in occupied_ids]
+                if not ids:
+                    continue
+                workers_sorted = sorted(workers, key=lambda item: (-item[2], item[0] if item[0] > 0 else 10**9))
+                for idx, (pid, tty, score) in enumerate(workers_sorted):
+                    if idx >= len(ids):
+                        break
+                    session_id = ids[idx]
+                    assigned[session_id] = (pid, tty, score + 1)
+                    occupied_ids.add(session_id)
+            return assigned
+        except sqlite3.OperationalError:
+            return {}
+        finally:
+            conn.close()
 
     def _load_session_meta(
         self,

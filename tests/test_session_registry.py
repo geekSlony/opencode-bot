@@ -276,6 +276,45 @@ def test_refresh_skips_session_not_found_in_db(monkeypatch, tmp_path):
     assert sessions[0].session_id == "ses_real"
 
 
+def test_refresh_infers_session_from_process_cwd_without_session_arg(monkeypatch, tmp_path):
+    db_path = tmp_path / "opencode.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE session (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            directory TEXT,
+            time_updated INTEGER,
+            time_archived INTEGER
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO session (id, title, directory, time_updated, time_archived) VALUES (?, ?, ?, ?, ?)",
+        ("ses_infer", "Inferred session", "/tmp/repo-a", 100, 0),
+    )
+    conn.commit()
+    conn.close()
+
+    ps_text = "PID UID TT ARGS\n777 1000 pts/2 opencode\n"
+
+    def fake_run(cmd, capture_output, text, check):
+        _ = (cmd, capture_output, text, check)
+        return FakeCompletedProcess(ps_text, 0)
+
+    monkeypatch.setattr("opencode_bot.session_registry.os.getuid", lambda: 1000)
+    monkeypatch.setattr("opencode_bot.session_registry.subprocess.run", fake_run)
+    monkeypatch.setattr("opencode_bot.session_registry.os.readlink", lambda p: "/tmp/repo-a")
+    monkeypatch.setattr("opencode_bot.session_registry.os.path.isdir", lambda p: p == "/tmp/repo-a")
+
+    registry = SessionRegistry(str(db_path))
+    sessions = registry.refresh()
+    assert len(sessions) == 1
+    assert sessions[0].session_id == "ses_infer"
+    assert sessions[0].status == "online"
+
+
 def test_title_agent_uses_recent_logs_for_summary(monkeypatch, tmp_path):
     db_path = tmp_path / "opencode.db"
     conn = sqlite3.connect(str(db_path))

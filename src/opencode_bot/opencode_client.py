@@ -1,6 +1,7 @@
 import os
 import subprocess
 import logging
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from .config import Settings
@@ -110,6 +111,38 @@ class OpenCodeClient:
         if isinstance(payload, str) and payload.strip():
             return payload
         return "会话已收到消息，但未返回可展示文本。"
+
+    def create_session(self, directory: Optional[str] = None) -> Tuple[Optional[str], str]:
+        if self._transport != "cli":
+            return None, "当前传输模式不支持创建本地 session。"
+
+        binary = self._opencode_bin
+        if not os.path.exists(binary):
+            binary = "opencode"
+
+        target_dir = (directory or "").strip()
+        if target_dir:
+            target_dir = os.path.abspath(os.path.expanduser(target_dir))
+            if not os.path.isdir(target_dir):
+                return None, f"目录不存在或不可访问: {target_dir}"
+        else:
+            target_dir = os.getcwd()
+
+        session_id = f"ses_{int(time.time())}_{os.getpid()}"
+        cmd = [binary, "-s", session_id]
+        try:
+            subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                cwd=target_dir,
+            )
+        except OSError as exc:
+            return None, f"创建 session 失败: {exc}"
+
+        return session_id, f"已创建 session: {session_id}"
 
     def list_cached_sessions(self, include_offline: bool) -> List[OnlineSession]:
         if self._transport != "cli":

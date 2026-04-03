@@ -1,4 +1,5 @@
 import asyncio
+from typing import Optional
 from typing import Any, cast
 
 from opencode_bot.models import FeishuInbound, OnlineSession
@@ -15,6 +16,7 @@ class FakeOpenCodeClient:
         ]
         self.calls: list[tuple[str, str]] = []
         self.refresh_called = 0
+        self.created: list[str] = []
 
     async def list_online_sessions(self):
         return self.sessions
@@ -25,6 +27,13 @@ class FakeOpenCodeClient:
 
     async def refresh_session_titles_now(self):
         self.refresh_called += 1
+
+    def create_session(self, directory: Optional[str] = None):
+        _ = directory
+        session_id = "s-new"
+        self.created.append(session_id)
+        self.sessions.append(OnlineSession(session_id=session_id, display_name="Session New", status="online"))
+        return session_id, f"已创建 session: {session_id}"
 
 
 class FakeFeishuClient:
@@ -167,6 +176,17 @@ def test_unbind_after_bind(tmp_path):
 
     current_res = asyncio.run(service.handle_inbound(make_inbound("m7", "/current")))
     assert current_res == "当前未绑定 session。"
+
+
+def test_session_new_creates_and_binds(tmp_path):
+    storage = Storage(str(tmp_path / "bot.db"))
+    client = FakeOpenCodeClient()
+    service = RelayService(storage=storage, opencode_client=cast(Any, client), settings=_settings())
+
+    response = asyncio.run(service.handle_inbound(make_inbound("m7b", "/session_new")))
+    assert "已创建 session: s-new" in str(response)
+    assert "已绑定 session" in str(response)
+    assert client.created == ["s-new"]
 
 
 def test_session_list_marks_workdir_unavailable(tmp_path):

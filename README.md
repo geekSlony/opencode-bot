@@ -50,6 +50,7 @@
 |------|--------|------|
 | `/session_list` | `/sl` | 查看在线 session 列表（下发按钮卡片） |
 | `/bind <session_id>` | `/bind <序号>` | 绑定会话，支持 session_id 或列表序号 |
+| `/session_new [目录]` | - | 主动创建新 session（可指定仓库目录）并自动尝试绑定 |
 | `/session_unbind` | `/su` | 解绑当前会话 |
 | `/send <session_id> <内容>` | - | 单次定向发送指令 |
 | `@<session_id> <内容>` | - | 单次定向发送快捷方式 |
@@ -174,6 +175,25 @@ scripts/opencode-botctl.sh status
 - `scripts/opencode-botctl.sh restart`
 - `scripts/opencode-botctl.sh status`
 - `scripts/opencode-botctl.sh log`
+- `scripts/opencode-botctl.sh autostart-enable`（用户级自启动）
+- `scripts/opencode-botctl.sh autostart-disable`
+- `scripts/opencode-botctl.sh autostart-status`
+
+### 5.4 用户级长期运行（不污染系统）
+
+为了让 bot 在你自己的账号下长期运行（不改系统级服务），推荐直接启用脚本内置的用户级 crontab 守护：
+
+```bash
+scripts/opencode-botctl.sh autostart-enable
+scripts/opencode-botctl.sh autostart-status
+```
+
+说明：
+
+- 使用当前用户 crontab，不需要 root
+- `@reboot` 自动拉起 bot
+- 每分钟自检一次，异常退出会自动重启
+- 自检日志：`/tmp/opencode-bot.cron.log`
 
 ---
 
@@ -185,11 +205,15 @@ scripts/opencode-botctl.sh status
 
 1. 飞书开放平台启用事件订阅并切到“长连接接收事件”
 2. 应用开通机器人能力及消息权限
+3. 事件订阅里至少勾选：
+   - `im.message.receive_v1`
+   - `card.action.trigger`（或 `p2_card_action_trigger`，按控制台版本命名）
 3. 配置：
    - `FEISHU_EVENT_MODE=long_conn`
    - `FEISHU_APP_ID`
    - `FEISHU_APP_SECRET`
    - `FEISHU_VERIFY_TOKEN`（建议与平台保持一致）
+4. 变更后到“版本管理与发布”执行发布，确保当前租户/测试人员可见
 
 ### 6.2 HTTP 回调模式
 
@@ -208,6 +232,20 @@ scripts/opencode-botctl.sh status
 4. 直接发普通文本，与当前绑定 session 持续对话
 5. 需要切换时再 `/bind` 新 session
 6. 结束时 `/session_unbind` (或 `/su`)
+
+如果按钮点击报错（如 `200340`），通常是飞书侧卡片回调事件未生效，可先用命令方式绑定：
+
+- `/bind <序号>`
+- `/bind <session_id>`
+
+### 7.3 无可用 session 时主动创建
+
+如果 `/session_list` 返回空，可直接在飞书创建新会话：
+
+- `/session_new`：在服务当前工作目录创建 session
+- `/session_new /abs/path/to/repo`：在指定仓库目录创建 session
+
+创建成功后会自动尝试绑定；若创建后短时间未被检测到，可稍后再 `/session_list` 并手动 `/bind`。
 
 ### 7.2 单次定向
 
@@ -252,7 +290,9 @@ scripts/opencode-botctl.sh status
 
 - `/session_list` 无响应：先看 `scripts/opencode-botctl.sh status` 和日志
 - 能收不能发：检查 `FEISHU_APP_ID/SECRET` 与机器人发送权限
-- 会话为空：确认当前用户下存在 `opencode -s ses_xxx` 在线进程
+- 会话为空：优先确认当前用户下存在在线 `opencode` 进程；推荐 `opencode -s ses_xxx`，也支持识别未带 `-s` 的进程（按工作目录映射最近 session）
+- 没有 session 但想立即开始：直接发 `/session_new [目录]`
+- 点击“绑定并继续”报错（如 `200340`）：检查事件订阅是否勾选卡片回调事件（`card.action.trigger`/`p2_card_action_trigger`）并重新发布应用；临时可改用 `/bind <序号|session_id>`
 - 事件不稳定：确认 `FEISHU_VERIFY_TOKEN` 已配置并与平台一致
 - 进程残留：统一使用 `opencode-botctl.sh`，不要混用手工 `nohup/pkill`
 

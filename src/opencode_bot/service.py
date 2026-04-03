@@ -81,6 +81,10 @@ class RelayService:
                 session_id = sessions[idx - 1].session_id
                 return await self._bind_session(inbound.peer_key, session_id)
             return await self._bind_session(inbound.peer_key, arg)
+        if lowered == "/session_new" or lowered.startswith("/session_new "):
+            target = text.split(maxsplit=1)
+            workdir = target[1].strip() if len(target) > 1 else ""
+            return await self._create_and_bind_session(inbound.peer_key, workdir)
 
         targeted = self._parse_targeted_message(text)
         if targeted is not None:
@@ -345,12 +349,27 @@ class RelayService:
             return "已解绑当前会话。"
         return "当前没有已绑定的 session，无需解绑。"
 
+    async def _create_and_bind_session(self, peer_key: str, workdir: str) -> str:
+        creator = getattr(self._opencode, "create_session", None)
+        if not callable(creator):
+            return "当前 OpenCode 客户端不支持创建 session。"
+
+        created, message = creator(workdir or None)
+        if not created:
+            return message
+
+        bind_result = await self.bind_peer_to_session(peer_key, created)
+        if "已绑定 session" in bind_result:
+            return f"{message}\n{bind_result}"
+        return f"{message}\n创建后暂未发现在线状态，请稍后发送 /session_list 再绑定。"
+
     @staticmethod
     def _help_text() -> str:
         return (
             "可用命令：\n"
             "/session_list (/sl) 查看在线 session\n"
             "/bind <session_id> (或 /bind <序号>) 绑定会话\n"
+            "/session_new [目录] 创建并绑定新会话\n"
             "/session_unbind (/su) 解绑当前会话\n"
             "/send <session_id> <内容> 定向发指令\n"
             "@ses_xxx <内容> 定向发指令\n"

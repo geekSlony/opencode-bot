@@ -8,7 +8,7 @@ from typing import Any, Dict, List, cast
 
 from .api import _extract_card_bind_action, _is_ignore_session_prompt, _is_sessions_command
 from .config import Settings
-from .feishu_client import FeishuClient
+from .feishu_client import FeishuClient, FeishuSendError
 from .models import FeishuInbound
 from .service import RelayService
 
@@ -271,11 +271,46 @@ class FeishuLongConnectionRunner:
         reply = ""
         for peer_key in peer_keys:
             reply = await self._relay_service.bind_peer_to_session(peer_key, session_id)
-        await self._feishu_client.send_text(
-            receive_id=receive_id,
-            receive_id_type=receive_id_type,
-            text=reply,
-        )
+        await self._send_text_with_card_fallback(event_dict, receive_id, receive_id_type, reply)
+
+    async def _send_text_with_card_fallback(
+        self,
+        event_dict: Dict[str, Any],
+        receive_id: str,
+        receive_id_type: str,
+        text: str,
+    ) -> None:
+        try:
+            await self._feishu_client.send_text(
+                receive_id=receive_id,
+                receive_id_type=receive_id_type,
+                text=text,
+            )
+            return
+        except FeishuSendError as exc:
+            if exc.error_code not in {200340, 99992361}:
+                raise
+
+            context = event_dict.get("context", {})
+            chat_id = str(context.get("open_chat_id") or "") if isinstance(context, dict) else ""
+            if not chat_id or receive_id_type == "chat_id":
+                logger.warning(
+                    "long_conn: suppress card follow-up send due to cross-app error code=%s receive_id_type=%s",
+                    exc.error_code,
+                    receive_id_type,
+                )
+                return
+
+            logger.warning(
+                "long_conn: send_text fallback to chat_id due to error_code=%s receive_id_type=%s",
+                exc.error_code,
+                receive_id_type,
+            )
+            await self._feishu_client.send_text(
+                receive_id=chat_id,
+                receive_id_type="chat_id",
+                text=text,
+            )
 
 
 def _to_dict(value: Any) -> Dict[str, Any]:
