@@ -199,6 +199,30 @@ class Storage:
             (message_id, peer_key, session_id, request_text, response_text, utc_now()),
         )
 
+    def list_recent_rounds(self, session_id: str, limit: int = 10) -> List[Tuple[str, str, str, str]]:
+        safe_limit = max(1, min(int(limit), 50))
+        rows = self._fetch_all(
+            """
+            SELECT created_at, peer_key, request_text, response_text
+            FROM relay_rounds
+            WHERE session_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (session_id, safe_limit),
+        )
+        output: List[Tuple[str, str, str, str]] = []
+        for row in rows:
+            output.append(
+                (
+                    str(row["created_at"]),
+                    str(row["peer_key"]),
+                    str(row["request_text"]),
+                    str(row["response_text"]),
+                )
+            )
+        return output
+
     def upsert_peer(self, peer_key: str, receive_id: str, receive_id_type: str) -> None:
         self._execute_write(
             """

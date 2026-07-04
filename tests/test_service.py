@@ -21,6 +21,10 @@ class FakeOpenCodeClient:
     async def list_online_sessions(self):
         return self.sessions
 
+    async def list_all_sessions(self):
+        offline = OnlineSession(session_id="s-offline", display_name="Session Offline", status="offline")
+        return [*self.sessions, offline]
+
     async def send_to_session(self, session_id: str, text: str) -> str:
         self.calls.append((session_id, text))
         return f"reply:{session_id}:{text}"
@@ -295,6 +299,60 @@ def test_session_list_command_alias_with_leading_slash(tmp_path):
 
     response = asyncio.run(service.handle_inbound(make_inbound("m12", "/session_list")))
     assert "在线 session 列表" in str(response)
+
+
+def test_session_all_includes_offline(tmp_path):
+    storage = Storage(str(tmp_path / "bot.db"))
+    client = FakeOpenCodeClient()
+    service = RelayService(storage=storage, opencode_client=cast(Any, client), settings=_settings())
+
+    response = asyncio.run(service.handle_inbound(make_inbound("m12b", "/session_all")))
+    assert "全部 session（在线+离线）" in str(response)
+    assert "[离线]" in str(response)
+    assert "Session Offline" in str(response)
+
+
+def test_history_uses_bound_session_by_default(tmp_path):
+    storage = Storage(str(tmp_path / "bot.db"))
+    client = FakeOpenCodeClient()
+    service = RelayService(storage=storage, opencode_client=cast(Any, client), settings=_settings())
+
+    bind_res = asyncio.run(service.handle_inbound(make_inbound("m13a", "/bind s-1")))
+    assert "已绑定" in str(bind_res)
+
+    relay_res = asyncio.run(service.handle_inbound(make_inbound("m13b", "hello history")))
+    assert relay_res == "reply:s-1:hello history"
+
+    history_res = asyncio.run(service.handle_inbound(make_inbound("m13c", "/history")))
+    assert "最近 1 条" in str(history_res)
+    assert "Q: hello history" in str(history_res)
+    assert "A: reply:s-1:hello history" in str(history_res)
+
+
+def test_history_with_explicit_session_and_limit(tmp_path):
+    storage = Storage(str(tmp_path / "bot.db"))
+    client = FakeOpenCodeClient()
+    service = RelayService(storage=storage, opencode_client=cast(Any, client), settings=_settings())
+
+    storage.save_round(
+        message_id="x1",
+        peer_key="chat:oc_x",
+        session_id="s-2",
+        request_text="first",
+        response_text="first-reply",
+    )
+    storage.save_round(
+        message_id="x2",
+        peer_key="chat:oc_x",
+        session_id="s-2",
+        request_text="second",
+        response_text="second-reply",
+    )
+
+    history_res = asyncio.run(service.handle_inbound(make_inbound("m13d", "/history s-2 1")))
+    assert "最近 1 条" in str(history_res)
+    assert "Q: second" in str(history_res)
+    assert "Q: first" not in str(history_res)
 
 
 def test_file_intent_does_not_treat_slash_command_as_path(tmp_path):

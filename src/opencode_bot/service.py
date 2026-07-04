@@ -64,8 +64,12 @@ class RelayService:
             return self._help_text()
         if lowered in {"/sessions", "/session_list", "session_list", "/sl", "sl", "sessions"}:
             return await self._list_sessions_text()
+        if lowered in {"/session_all", "session_all", "/sa", "sa"}:
+            return await self._list_all_sessions_text()
         if lowered in {"/current", "/c", "current", "c"}:
             return self._current_binding_text(inbound.peer_key)
+        if lowered == "/history" or lowered.startswith("/history "):
+            return await self._history_text(inbound.peer_key, text)
         if lowered in {"/unbind", "/su", "session_unbind", "unbind", "su"}:
             return self._unbind_session(inbound.peer_key)
         if lowered.startswith("/bind ") or lowered.startswith("bind "):
@@ -238,16 +242,74 @@ class RelayService:
         lines.append("发送 /bind <session_id> 进行绑定。")
         return "\n".join(lines)
 
+    async def _list_all_sessions_text(self) -> str:
+        fetcher = getattr(self._opencode, "list_all_sessions", None)
+        if callable(fetcher):
+            maybe = fetcher()
+            sessions = await maybe if asyncio.iscoroutine(maybe) else maybe
+        else:
+            sessions = await self._opencode.list_online_sessions()
+
+        if not sessions:
+            return "当前没有可用 session。"
+
+        lines = ["全部 session（在线+离线）："]
+        for idx, session in enumerate(sessions, start=1):
+            lines.append(self._render_session_all_line(idx, session))
+        lines.append("发送 /bind <session_id> 进行绑定，或 /history <session_id> 查看历史。")
+        return "\n".join(lines)
+
     @staticmethod
     def _render_session_line(idx: int, session: OnlineSession) -> str:
         display_id = RelayService._display_session_id(session.session_id)
         return f"{idx}. {display_id} | {session.display_name}"
+
+    @staticmethod
+    def _render_session_all_line(idx: int, session: OnlineSession) -> str:
+        display_id = RelayService._display_session_id(session.session_id)
+        status = "在线" if session.status == "online" else "离线"
+        return f"{idx}. [{status}] {display_id} | {session.display_name}"
 
     def _current_binding_text(self, peer_key: str) -> str:
         bound = self._storage.get_bound_session(peer_key)
         if not bound:
             return "当前未绑定 session。"
         return f"当前绑定 session: {self._display_session_id(bound)}"
+
+    async def _history_text(self, peer_key: str, text: str) -> str:
+        parts = text.split()
+        bound = self._storage.get_bound_session(peer_key)
+        session_id = bound or ""
+        limit = 10
+
+        if len(parts) >= 2:
+            candidate = parts[1].strip()
+            if candidate.isdigit():
+                limit = int(candidate)
+            else:
+                session_id = candidate
+        if len(parts) >= 3 and parts[2].strip().isdigit():
+            limit = int(parts[2].strip())
+
+        if not session_id:
+            return "用法：/history <session_id> [条数]。未传 session_id 时会使用当前绑定会话。"
+
+        resolved = await self._resolve_session(session_id)
+        if resolved is not None:
+            session_id = resolved.session_id
+
+        rows = self._storage.list_recent_rounds(session_id, limit=limit)
+        if not rows:
+            return f"session {self._display_session_id(session_id)} 暂无历史记录。"
+
+        lines = [f"session {self._display_session_id(session_id)} 最近 {len(rows)} 条："]
+        for idx, (created_at, peer, request_text, response_text) in enumerate(rows, start=1):
+            req = self._clip_line(request_text)
+            resp = self._clip_line(response_text)
+            lines.append(f"{idx}. {created_at} | {peer}")
+            lines.append(f"   Q: {req}")
+            lines.append(f"   A: {resp}")
+        return "\n".join(lines)
 
     async def _handle_file_intent(self, inbound: FeishuInbound, target: ReplyTarget) -> Optional[str]:
         if not bool(self._settings.opencode_send_files_enabled):
@@ -383,9 +445,11 @@ class RelayService:
         return (
             "可用命令：\n"
             "/session_list (/sl) 查看在线 session\n"
+            "/session_all (/sa) 查看全部 session（在线+离线）\n"
             "/bind <session_id> (或 /bind <序号>) 绑定会话\n"
             "/session_new [目录] (或 /sn [目录]) 创建并绑定新会话\n"
             "/session_unbind (/su) 解绑当前会话\n"
+            "/history <session_id> [条数] 查看会话历史\n"
             "/send <session_id> <内容> 定向发指令\n"
             "@ses_xxx <内容> 定向发指令\n"
             "/current (/c) 查看当前绑定\n"
@@ -411,6 +475,13 @@ class RelayService:
         if session_id.startswith("ses_") and len(session_id) > 9:
             return f"{session_id[:9]}..."
         return session_id
+
+    @staticmethod
+    def _clip_line(text: str, limit: int = 120) -> str:
+        cleaned = str(text).strip().replace("\n", " ")
+        if len(cleaned) <= limit:
+            return cleaned
+        return f"{cleaned[:limit]}..."
 
 
 def _split_csv(value: str) -> List[str]:

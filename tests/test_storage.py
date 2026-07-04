@@ -61,3 +61,17 @@ def test_execute_write_retries_when_locked():
     assert fake.calls == 3
     assert fake.rollbacks == 2
     assert fake.commits == 1
+
+
+def test_list_recent_rounds_returns_latest_first(tmp_path):
+    db_path = tmp_path / "bot.db"
+    storage = Storage(str(db_path))
+
+    storage.save_round("m1", "chat:1", "s-1", "req1", "resp1")
+    storage.save_round("m2", "chat:1", "s-1", "req2", "resp2")
+
+    rows = storage.list_recent_rounds("s-1", limit=1)
+    assert len(rows) == 1
+    _, _, request_text, response_text = rows[0]
+    assert request_text == "req2"
+    assert response_text == "resp2"

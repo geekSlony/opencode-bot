@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import sqlite3
 from pathlib import Path
@@ -357,3 +358,25 @@ def test_create_session_starts_opencode_with_session_id(monkeypatch, tmp_path):
     assert captured["cmd"][1] == "run"
     assert "--dir" in captured["cmd"]
     assert captured["cwd"] == str(tmp_path)
+
+
+def test_list_all_sessions_merges_online_and_offline(monkeypatch):
+    client = OpenCodeClient(_settings())
+    monkeypatch.setattr(
+        client._session_registry,
+        "refresh",
+        lambda: [OnlineSession(session_id="s-1", display_name="Online 1", status="online", last_seen_ts=100)],
+    )
+    monkeypatch.setattr(
+        client,
+        "_list_db_sessions",
+        lambda: [
+            OnlineSession(session_id="s-1", display_name="DB 1", status="offline", last_seen_ts=50),
+            OnlineSession(session_id="s-2", display_name="DB 2", status="offline", last_seen_ts=90),
+        ],
+    )
+
+    sessions = asyncio.run(client.list_all_sessions())
+    assert [item.session_id for item in sessions] == ["s-1", "s-2"]
+    assert sessions[0].status == "online"
+    assert sessions[1].status == "offline"

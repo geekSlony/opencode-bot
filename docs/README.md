@@ -24,8 +24,10 @@
 
 6. 飞书常用命令
 - `/session_list` 或 `/sl`：查看可绑定会话
+- `/session_all` 或 `/sa`：查看全部会话（在线+离线）
 - `/session_new [目录]` 或 `/sn [目录]`：无会话时主动创建并尝试自动绑定
 - `/bind <序号|session_id>`：绑定会话
+- `/history [session_id] [条数]`：查看会话最近历史（默认当前绑定，默认10条）
 - `/current`：查看当前绑定
 - `/session_unbind`：解绑
 
@@ -39,7 +41,6 @@
 - 之后再检查第 7 步的事件订阅与发布状态
 
 <img src="./images/success_verify.png" alt="opencode-bot icon" width="540" />
-
 
 
 

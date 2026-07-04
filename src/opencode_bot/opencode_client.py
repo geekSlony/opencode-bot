@@ -66,6 +66,27 @@ class OpenCodeClient:
                 )
         return sessions
 
+    async def list_all_sessions(self) -> List[OnlineSession]:
+        if self._transport != "cli":
+            return await self.list_online_sessions()
+
+        online = self._session_registry.refresh()
+        online_map = {item.session_id: item for item in online}
+
+        output: List[OnlineSession] = []
+        for item in self._list_db_sessions():
+            online_item = online_map.pop(item.session_id, None)
+            if online_item is not None:
+                output.append(online_item)
+            else:
+                output.append(item)
+
+        if online_map:
+            output.extend(online_map.values())
+
+        output.sort(key=lambda item: (0 if item.status == "online" else 1, -item.last_seen_ts, item.session_id))
+        return output
+
     async def refresh_session_titles_now(self) -> None:
         if self._transport != "cli":
             return
@@ -338,6 +359,58 @@ class OpenCodeClient:
             directory=directory,
             workdir_available=bool(directory and os.path.isdir(directory)),
         )
+
+    def _list_db_sessions(self) -> List[OnlineSession]:
+        db_path = os.path.expanduser(self._db_path)
+        if not os.path.exists(db_path):
+            return []
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, title, directory, COALESCE(time_updated, 0) AS time_updated
+                FROM session
+                WHERE time_archived IS NULL OR time_archived = 0
+                ORDER BY time_updated DESC
+                """
+            ).fetchall()
+        except sqlite3.OperationalError:
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT id, title, directory, COALESCE(time_updated, 0) AS time_updated
+                    FROM session
+                    ORDER BY time_updated DESC
+                    """
+                ).fetchall()
+            except sqlite3.OperationalError:
+                return []
+        finally:
+            conn.close()
+
+        output: List[OnlineSession] = []
+        for row in rows:
+            sid = str(row["id"]) if row["id"] else ""
+            if not sid:
+                continue
+            title = str(row["title"]) if row["title"] else sid
+            directory = str(row["directory"]) if row["directory"] else ""
+            updated = int(row["time_updated"]) if row["time_updated"] else 0
+            output.append(
+                OnlineSession(
+                    session_id=sid,
+                    display_name=title,
+                    status="offline",
+                    pid=None,
+                    tty="",
+                    last_seen_ts=updated,
+                    directory=directory,
+                    workdir_available=bool(directory and os.path.isdir(directory)),
+                )
+            )
+        return output
 
     def _list_session_ids_by_directory(self, directory: str) -> "set[str]":
         db_path = os.path.expanduser(self._db_path)

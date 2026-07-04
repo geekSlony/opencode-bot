@@ -49,9 +49,11 @@
 | 命令 | 快捷键 | 说明 |
 |------|--------|------|
 | `/session_list` | `/sl` | 查看在线 session 列表（下发按钮卡片） |
+| `/session_all` | `/sa` | 查看全部 session（在线+离线） |
 | `/bind <session_id>` | `/bind <序号>` | 绑定会话，支持 session_id 或列表序号 |
 | `/session_new [目录]` | `/sn [目录]` | 主动创建新 session（可指定仓库目录）并自动尝试绑定 |
 | `/session_unbind` | `/su` | 解绑当前会话 |
+| `/history [session_id] [条数]` | - | 查看该 session 最近对话历史（默认当前绑定，默认 10 条） |
 | `/send <session_id> <内容>` | - | 单次定向发送指令 |
 | `@<session_id> <内容>` | - | 单次定向发送快捷方式 |
 | `/current` | `/c` | 查看当前绑定状态 |
@@ -232,6 +234,12 @@ scripts/opencode-botctl.sh autostart-status
 4. 直接发普通文本，与当前绑定 session 持续对话
 5. 需要切换时再 `/bind` 新 session
 6. 结束时 `/session_unbind` (或 `/su`)
+
+补充：
+
+- 需要看离线会话时，用 `/session_all`（或 `/sa`）
+- 需要查看某个会话最近执行记录时，用 `/history <session_id> [条数]`
+- 已绑定场景可直接 `/history`（默认查看当前绑定会话最近 10 条）
 
 如果按钮点击报错（如 `200340`），通常是飞书侧卡片回调事件未生效，可先用命令方式绑定：
 
